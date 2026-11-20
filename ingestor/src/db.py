@@ -6,20 +6,10 @@ Receives data from the OPC UA server and ingests it into the database.
 
 import traceback
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from logging import getLogger
 
-from asyncua import ua  # pyright: ignore[reportMissingTypeStubs]
 from lib.database import ProjectDatabase
-from lib.models import (
-    CPUUsage,
-    KepEvent,
-    NetworkUsage,
-    RAMUsage,
-    ServiceInfo,
-    StorageUsage,
-    TagData,
-)
 
 logger = getLogger(__name__)
 
@@ -38,12 +28,15 @@ class IngestorDatabase(ProjectDatabase):
 
                 CREATE TABLE IF NOT EXISTS tags (
                     logger_timestamp    TIMESTAMPTZ NOT NULL,
+                    address             TEXT NOT NULL,
                     tag                 TEXT NOT NULL,
                     value               TEXT,
                     status_code         TEXT,
                     source_timestamp    TIMESTAMPTZ,
                     server_timestamp    TIMESTAMPTZ
                 );
+
+                ALTER TABLE tags ADD COLUMN IF NOT EXISTS address TEXT NOT NULL DEFAULT '';
 
                 CREATE TABLE IF NOT EXISTS events (
                     hash        TEXT NOT NULL,
@@ -83,6 +76,23 @@ class IngestorDatabase(ProjectDatabase):
                     process_ids     TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS heartbeat_rtt (
+                    timestamp   TIMESTAMPTZ NOT NULL,
+                    pair        TEXT NOT NULL,
+                    value       INTEGER NOT NULL,
+                    rtt_ms      DOUBLE PRECISION NOT NULL,
+                    PRIMARY KEY (pair, value, timestamp)
+                );
+
+                CREATE TABLE IF NOT EXISTS agent_logs (
+                    timestamp   TIMESTAMPTZ NOT NULL,
+                    level       TEXT NOT NULL,
+                    component   TEXT NOT NULL,
+                    message     TEXT NOT NULL,
+                    traceback   TEXT,
+                    PRIMARY KEY (timestamp, component, message)
+                );
+
                 CREATE TABLE IF NOT EXISTS active_log (
                     timestamp   TIMESTAMPTZ NOT NULL,
                     event       TEXT NOT NULL,
@@ -110,13 +120,15 @@ class IngestorDatabase(ProjectDatabase):
                 """
             ],
             indexes=[
-                "CREATE INDEX IF NOT EXISTS idx_tags_tag_timestamp ON tags (tag, logger_timestamp DESC);",
+                "CREATE INDEX IF NOT EXISTS idx_tags_address_tag_timestamp ON tags (address, tag, logger_timestamp DESC);",
                 "CREATE INDEX IF NOT EXISTS idx_cpu_timestamp ON cpu_usage (timestamp DESC);",
                 "CREATE INDEX IF NOT EXISTS idx_network_timestamp ON network_usage (timestamp DESC, interface);",
                 "CREATE INDEX IF NOT EXISTS idx_ram_timestamp ON ram_usage (timestamp DESC);",
                 "CREATE INDEX IF NOT EXISTS idx_storage_timestamp ON storage_usage (timestamp DESC);",
                 "CREATE INDEX IF NOT EXISTS idx_services_timestamp ON services (timestamp DESC, name);",
                 "CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events (timestamp DESC);",
+                "CREATE INDEX IF NOT EXISTS idx_heartbeat_rtt_timestamp ON heartbeat_rtt (timestamp DESC, pair);",
+                "CREATE INDEX IF NOT EXISTS idx_agent_logs_timestamp ON agent_logs (timestamp DESC, level);",
                 "CREATE INDEX IF NOT EXISTS idx_active_log_timestamp ON active_log (timestamp DESC);",
                 "CREATE INDEX IF NOT EXISTS idx_active_log_error_id ON active_log (error_id);",
                 "CREATE INDEX IF NOT EXISTS idx_ingestor_logs_timestamp ON ingestor_logs (timestamp DESC, level);",
@@ -130,137 +142,51 @@ class IngestorDatabase(ProjectDatabase):
                 ("storage_usage", "timestamp"),
                 ("services", "timestamp"),
                 ("events", "timestamp"),
+                ("heartbeat_rtt", "timestamp"),
+                ("agent_logs", "timestamp"),
                 ("active_log", "timestamp"),
                 ("ingestor_logs", "timestamp"),
             ],
         )
+        # Publisher migration is optional; old deployments keep working.
+        with self.transaction():
+            with self.connection.cursor() as cur:
+                cur.execute("""SELECT table_name FROM information_schema.columns
+                    WHERE table_schema='public' AND table_name IN ('cpu_usage','ram_usage')
+                    AND column_name='sample_id'""")
+                self._sample_id_tables = {row[0] for row in cur.fetchall()}
         logger.info(
             f"Database initialized with {self.retention_days} days retention policy."
         )
 
-    def save_many(self, rows: list[TagData]) -> None:
-        if not rows:
+    def insert_many(self, rows_by_table: dict[str, list[dict[str, object]]]) -> None:
+        """
+        Writes rows to several tables in one transaction. Each table maps to its rows,
+        a dict of column -> value with the same columns throughout. A row the table
+        already has (same primary key) is skipped, which is how the republished
+        event list is deduplicated.
+        """
+        statements = []
+        for table, rows in rows_by_table.items():
+            if not rows:
+                continue
+            if table in getattr(self, "_sample_id_tables", set()):
+                # Mutate the pending batch once so database retries retain IDs.
+                for row in rows:
+                    row.setdefault("sample_id", uuid.uuid4())
+            columns = list(rows[0])
+            for identifier in (table, *columns):
+                self._validate_identifier(identifier)
+            query = (
+                f"INSERT INTO {table} ({', '.join(columns)}) "
+                f"VALUES ({', '.join(['%s'] * len(columns))}) ON CONFLICT DO NOTHING;"
+            )
+            statements.append((query, [tuple(r[c] for c in columns) for r in rows]))
+        if not statements:
             return
         with self.transaction():
-            self.execute_many(
-                """
-                INSERT INTO tags (tag, value, status_code, source_timestamp, server_timestamp, logger_timestamp)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                """,
-                [
-                    (
-                        r.tag,
-                        r.value,
-                        r.status_code,
-                        r.source_timestamp,
-                        r.server_timestamp,
-                        r.logger_timestamp,
-                    )
-                    for r in rows
-                ],
-            )
-
-    def process_tag_values(
-        self, tag_values: list[tuple[str, ua.DataValue]], timestamp: datetime
-    ) -> list[TagData]:
-        rows: list[TagData] = []
-        for tag_name, data_value in tag_values:
-            if data_value.Value is None:
-                raise ValueError(f"Received None for tag '{tag_name}' at {timestamp}")
-            status_code = data_value.StatusCode
-            raw_value: object = data_value.Value.Value  # pyright: ignore[reportAny]
-            rows.append(
-                TagData(
-                    tag=tag_name,
-                    value=str(raw_value),
-                    status_code=status_code.name
-                    if status_code is not None
-                    else "Unknown",
-                    source_timestamp=data_value.SourceTimestamp,
-                    server_timestamp=data_value.ServerTimestamp,
-                    logger_timestamp=timestamp,
-                )
-            )
-        return rows
-
-    def insert_event(self, event: KepEvent) -> None:
-        with self.transaction():
-            self.execute(
-                """
-                INSERT INTO events (hash, timestamp, event_name, source, message)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (hash, timestamp) DO NOTHING;
-                """,
-                (
-                    event.hash,
-                    event.timestamp,
-                    event.name,
-                    event.source,
-                    event.message,
-                ),
-            )
-
-    def insert_cpu_usage(self, cpu_usage: CPUUsage) -> None:
-        with self.transaction():
-            self.execute(
-                "INSERT INTO cpu_usage (timestamp, usage) VALUES (%s, %s);",
-                (cpu_usage.timestamp, cpu_usage.usage),
-            )
-
-    def insert_ram_usage(self, ram_usage: RAMUsage) -> None:
-        with self.transaction():
-            self.execute(
-                "INSERT INTO ram_usage (timestamp, total_kb, free_kb) VALUES (%s, %s, %s);",
-                (ram_usage.timestamp, ram_usage.total_kb, ram_usage.free_kb),
-            )
-
-    def insert_storage_usage(self, storage_usage: StorageUsage) -> None:
-        with self.transaction():
-            self.execute(
-                "INSERT INTO storage_usage (timestamp, total_gb, used_gb, free_gb) VALUES (%s, %s, %s, %s);",
-                (
-                    storage_usage.timestamp,
-                    storage_usage.total_gb,
-                    storage_usage.used_gb,
-                    storage_usage.free_gb,
-                ),
-            )
-
-    def insert_network_metrics(self, network_usage: NetworkUsage) -> None:
-        with self.transaction():
-            self.execute(
-                """
-                INSERT INTO network_usage (
-                    timestamp, interface, operational_status, network_interface_type, kb_bytes_sent, kb_bytes_received
-                )
-                VALUES (%s, %s, %s, %s, %s, %s);
-                """,
-                (
-                    network_usage.timestamp,
-                    network_usage.interface,
-                    network_usage.operational_status,
-                    network_usage.network_interface_type,
-                    network_usage.kb_bytes_sent,
-                    network_usage.kb_bytes_received,
-                ),
-            )
-
-    def insert_service_info(self, service_info: ServiceInfo) -> None:
-        with self.transaction():
-            self.execute(
-                """
-                INSERT INTO services (timestamp, name, status, service_type, machine_name, process_ids)
-                VALUES (%s, %s, %s, %s, %s, %s);
-                """,
-                (
-                    service_info.timestamp,
-                    service_info.name,
-                    service_info.status,
-                    service_info.service_type,
-                    service_info.machine_name,
-                    ",".join(str(pid) for pid in service_info.process_ids),
-                ),
-            )
+            for query, params in statements:
+                self.execute_many(query, params)
 
     def log_status(
         self,
@@ -283,7 +209,7 @@ class IngestorDatabase(ProjectDatabase):
                 INSERT INTO active_log (timestamp, event, host_name, reason, error_id)
                 VALUES (%s, %s, %s, %s, %s);
                 """,
-                (datetime.now(timezone.utc), event, host_name, reason, error_id),
+                (datetime.now(UTC), event, host_name, reason, error_id),
             )
 
     def log_event(self, level: str, component: str, exc: BaseException) -> str:
@@ -303,7 +229,7 @@ class IngestorDatabase(ProjectDatabase):
                 """,
                 (
                     event_id,
-                    datetime.now(timezone.utc),
+                    datetime.now(UTC),
                     level,
                     component,
                     f"{type(exc).__name__}: {exc}",

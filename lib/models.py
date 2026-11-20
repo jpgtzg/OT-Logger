@@ -45,8 +45,13 @@ class OPCUAModel(BaseModel):
         data["timestamp"] = ts.strftime(TIMESTAMP_FORMAT)
         return data
 
+    def to_row(self) -> dict[str, object]:
+        """The values to store in the database, keyed by field name."""
+        return self.model_dump()
+
 
 class TagData(BaseModel):
+    address: str
     tag: str
     value: str
     status_code: str
@@ -95,6 +100,47 @@ class ServiceInfo(OPCUAModel):
     def to_opcua(self) -> dict:
         data = super().to_opcua()
         data["process_ids"] = ",".join(str(pid) for pid in self.process_ids)
+        return data
+
+    def to_row(self) -> dict[str, object]:
+        data = super().to_row()
+        data["process_ids"] = ",".join(str(pid) for pid in self.process_ids)
+        return data
+
+
+class HeartbeatRTT(OPCUAModel):
+    """
+    One heartbeat round trip: `value` was written to the send tag and its echo came
+    back `rtt_ms` later. `timestamp` is when the echo arrived. Measured with a
+    monotonic clock by whoever sends, so it is not limited by KEPServer's timestamps.
+    """
+
+    pair: str
+    value: int
+    rtt_ms: float
+
+    def to_opcua(self) -> dict:
+        data = super().to_opcua()
+        # The default wire format has whole-second precision, too coarse for an RTT.
+        data["timestamp"] = self.timestamp.isoformat()
+        return data
+
+
+class AgentError(OPCUAModel):
+    """
+    A warning or error the agent logged. `timestamp` is when it was logged, and
+    `component` is the `[TAG]` its message started with, or else its logger's name.
+    """
+
+    level: str
+    component: str
+    message: str
+    traceback: str | None = None
+
+    def to_opcua(self) -> dict:
+        data = super().to_opcua()
+        # Two errors in the same second must stay distinct rows.
+        data["timestamp"] = self.timestamp.isoformat()
         return data
 
 

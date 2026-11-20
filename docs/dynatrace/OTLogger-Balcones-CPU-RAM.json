@@ -1,0 +1,91 @@
+{
+  "version": "7",
+  "defaultTimeframe": {
+    "from": "now()-7d",
+    "to": "now()"
+  },
+  "sections": [
+    {
+      "id": "1",
+      "type": "markdown",
+      "markdown": "# OTLogger · Balcones PCN\n\nMuestra CPU/RAM enviada por OTLP. Rango inicial: últimos 7 días, para incluir la prueba del 18 de noviembre. Ajusta el selector al timestamp original de los CSV. No hay publicación continua: se envió un solo lote.\n\nLas consultas no filtran por servicio para evitar ocultar series durante el diagnóstico. Un resultado vacío o null no prueba recepción. Verifica nombres, permisos, horario y rechazos del Collector. Los promedios agrupan muestras por minuto; no son un volcado crudo."
+    },
+    {
+      "id": "2",
+      "type": "dql",
+      "title": "CPU · porcentaje",
+      "showTitle": true,
+      "showInput": true,
+      "state": {
+        "input": {
+          "value": "timeseries cpu_percent = avg(otlogger.cpu.usage), interval: 1m"
+        },
+        "visualization": "lineChart",
+        "visualizationSettings": {
+          "autoSelectVisualization": true,
+          "chartSettings": {}
+        },
+        "querySettings": {
+          "maxResultRecords": 1000,
+          "defaultScanLimitGbytes": 1,
+          "maxResultMegaBytes": 1,
+          "defaultSamplingRatio": 10,
+          "enableSampling": false
+        }
+      }
+    },
+    {
+      "id": "3",
+      "type": "dql",
+      "title": "RAM total · KiB",
+      "showTitle": true,
+      "showInput": true,
+      "state": {
+        "input": {
+          "value": "timeseries ram_total_kib = avg(otlogger.ram.total), interval: 1m"
+        },
+        "visualization": "lineChart",
+        "visualizationSettings": {
+          "autoSelectVisualization": true,
+          "chartSettings": {}
+        },
+        "querySettings": {
+          "maxResultRecords": 1000,
+          "defaultScanLimitGbytes": 1,
+          "maxResultMegaBytes": 1,
+          "defaultSamplingRatio": 10,
+          "enableSampling": false
+        }
+      }
+    },
+    {
+      "id": "4",
+      "type": "dql",
+      "title": "RAM disponible · KiB",
+      "showTitle": true,
+      "showInput": true,
+      "state": {
+        "input": {
+          "value": "timeseries ram_free_kib = avg(otlogger.ram.free), interval: 1m"
+        },
+        "visualization": "lineChart",
+        "visualizationSettings": {
+          "autoSelectVisualization": true,
+          "chartSettings": {}
+        },
+        "querySettings": {
+          "maxResultRecords": 1000,
+          "defaultScanLimitGbytes": 1,
+          "maxResultMegaBytes": 1,
+          "defaultSamplingRatio": 10,
+          "enableSampling": false
+        }
+      }
+    },
+    {
+      "id": "5",
+      "type": "markdown",
+      "markdown": "## Interpretación\n\nCPU usa porcentajes originales. RAM conserva KiB (no bytes). Se esperan pocos puntos y muchos intervalos sin datos. No reemplazamos null por cero. La identificación esperada del emisor es service.name=otlogger-publisher-test. El host medido es el servidor Kep, no el pod del publisher.\n\nFuentes de estructura y DQL: https://github.com/Dynatrace/dynatrace-for-ai/tree/main/skills/dt-app-notebooks y https://docs.dynatrace.com/docs/platform/grail/dynatrace-query-language/commands/metric-commands"
+    }
+  ]
+}

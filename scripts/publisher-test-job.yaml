@@ -1,0 +1,36 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: otlogger-publisher-test
+  namespace: idl
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 60
+  template:
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: usprmsmovmp01
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: sender
+          image: docker.io/library/ingestor:latest
+          imagePullPolicy: Never
+          command: ["python3", "/sample/send-test-otlp.py", "/sample", "--max-age-seconds", "3600"]
+          env:
+            - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+              value: http://otel-collector.observability.svc.cluster.local:4318/v1/metrics
+            - name: OTEL_SERVICE_NAME
+              value: otlogger-publisher-test
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+          volumeMounts:
+            - name: sample
+              mountPath: /sample
+              readOnly: true
+      volumes:
+        - name: sample
+          configMap:
+            name: otlogger-publisher-test-input

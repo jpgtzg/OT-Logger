@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otlogger-publisher
+  namespace: idl
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: otlogger-publisher
+  template:
+    metadata:
+      labels:
+        app: otlogger-publisher
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: usprmsmovmp01
+      automountServiceAccountToken: false
+      containers:
+        - name: publisher
+          image: otlogger-publisher:0.1.0
+          imagePullPolicy: Never
+          envFrom:
+            - secretRef:
+                name: otlogger-publisher-db
+          env:
+            - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+              value: http://otel-collector.observability.svc.cluster.local:4318/v1/metrics
+            - name: OTEL_SERVICE_NAME
+              value: otlogger-publisher
+            - name: OTLOGGER_SOURCE
+              value: kepserver_pcn
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: PUBLISH_BATCH_SIZE
+              value: "100"
+            - name: PUBLISH_POLL_SECONDS
+              value: "5"
+            - name: PUBLISH_MAX_AGE_SECONDS
+              value: "3600"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: [ALL]

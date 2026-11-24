@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+from pathlib import Path
 import signal
 import threading
 import urllib.error
@@ -12,6 +13,7 @@ from urllib.parse import urlsplit
 import psycopg
 from psycopg.rows import dict_row
 
+from selector import parse_selector
 from core import full_ack, request_body
 
 log = logging.getLogger('otlogger.publisher')
@@ -31,6 +33,7 @@ def main():
     max_age = int(os.getenv('PUBLISH_MAX_AGE_SECONDS', '3600'))
     if not 1 <= size <= 1000 or poll <= 0 or max_age <= 0:
         raise ValueError('Invalid batch, poll or age limits')
+    selector_path = os.getenv('PUBLISH_TAGS_CSV')
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())
     while not stop.is_set():
@@ -39,7 +42,22 @@ def main():
             # interpolation of passwords in connection strings or logs.
             with psycopg.connect(connect_timeout=10, autocommit=True, row_factory=dict_row) as conn:
                 conn.execute("SET statement_timeout = '15s'")
+                selector_content = None
                 while not stop.is_set():
+                    if selector_path:
+                        try:
+                            content = Path(selector_path).read_text()
+                            if content != selector_content:
+                                selection = parse_selector(content)
+                                with conn.transaction():
+                                    conn.execute('DELETE FROM telemetry_export_tags')
+                                    for item in selection:
+                                        conn.execute('INSERT INTO telemetry_export_tags VALUES (%s,%s,%s,%s)',
+                                            (item['address'],item['tag'],item['metric_name'],item['unit']))
+                                selector_content = content
+                                log.info('tag_selector_entries=%d', len(selection))
+                        except (OSError, ValueError):
+                            log.error('Invalid/unavailable tags CSV; keeping previous selection')
                     # Claim durable work atomically. An expired lease is reclaimed
                     # after a crash; old attempts cannot acknowledge a new claim.
                     token = uuid.uuid4()
@@ -61,6 +79,20 @@ def main():
                         AND collector_accepted_at<now()-interval '48 hours' LIMIT 1000)""")
                     counts = conn.execute('SELECT status,count(*) AS count FROM telemetry_outbox GROUP BY status').fetchall()
                     log.info('outbox_counts=%s', counts)
+                    if not rows:
+                        stop.wait(poll)
+                        continue
+                    valid = []
+                    for row in rows:
+                        try:
+                            json.dumps(request_body([row], service, source), allow_nan=False)
+                        except (ValueError, KeyError, TypeError, OverflowError):
+                            conn.execute("""UPDATE telemetry_outbox SET status='rejected',
+                                last_error='Invalid numeric sample or mapping',attempt_id=NULL,lease_until=NULL
+                                WHERE sample_id=%s AND attempt_id=%s""", (row['sample_id'],token))
+                        else:
+                            valid.append(row)
+                    rows = valid
                     if not rows:
                         stop.wait(poll)
                         continue

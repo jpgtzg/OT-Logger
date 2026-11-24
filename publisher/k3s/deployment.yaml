@@ -20,12 +20,18 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: publisher
-          image: otlogger-publisher:0.1.0
+          image: otlogger-publisher:0.2.0
           imagePullPolicy: Never
           envFrom:
             - secretRef:
                 name: otlogger-publisher-db
+          volumeMounts:
+            - name: export-tags
+              mountPath: /config
+              readOnly: true
           env:
+            - name: PUBLISH_TAGS_CSV
+              value: /config/tags-export.csv
             - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
               value: http://otel-collector.observability.svc.cluster.local:4318/v1/metrics
             - name: OTEL_SERVICE_NAME
@@ -55,3 +61,7 @@ spec:
             runAsNonRoot: true
             capabilities:
               drop: [ALL]
+      volumes:
+        - name: export-tags
+          configMap:
+            name: otlogger-publisher-tags

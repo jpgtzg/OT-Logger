@@ -1,7 +1,8 @@
-# OTLogger Publisher 0.1.0 (validación DEV pendiente)
+# OTLogger Publisher 0.2.0
 
 Proceso independiente que publica CPU y RAM desde una outbox PostgreSQL hacia
-el Collector compartido. No usa CSV ni kubectl para la operación continua.
+el Collector compartido. También publica tags numéricas seleccionadas mediante
+un CSV de configuración; las muestras se leen del outbox, no del CSV.
 
 ```mermaid
 flowchart LR
@@ -31,7 +32,7 @@ flowchart LR
    PGUSER, PGPASSWORD. Usar el Service TimescaleDB real. No guardar secretos
    en Git ni copiar las credenciales del administrador.
 5. Construir desde la raíz: `docker build -f publisher/Dockerfile -t
-   otlogger-publisher:0.1.0 .` y cargar la imagen según el procedimiento edge.
+   otlogger-publisher:0.2.0 .` y cargar la imagen según el procedimiento edge.
 6. Ajustar `k3s/deployment.yaml`: imagen, nodo si solo uno tiene la imagen
    importada, Service DB, endpoint e identidad del servidor medido. Aplicar
    únicamente ese manifiesto, sin desplegar otra TimescaleDB.
@@ -73,15 +74,56 @@ PUBLISH_MAX_AGE_SECONDS (3600), y variables libpq PG*.
 PostgreSQL 18 temporal la migración y atomicidad de inserción/rollback. Falta
 validación sobre TimescaleDB real, lease/reinicio/concurrencia end-to-end y corte
 con recuperación contra Collector/Dynatrace. La imagen no se construyó ni el
-Deployment se aplicó desde este equipo. El piloto anterior validó un único lote.
+Deployment se aplicó desde este equipo. La publicación continua de CPU/RAM fue aceptada por el Collector en Balcones;
+la entrega final a Dynatrace requiere validación independiente.
 
 ## Compatibilidad con main actual
 
-El ingestor usa suscripciones y `insert_many`. El publisher sigue limitado a
-CPU/RAM: sus columnas no cambiaron. `tags.address`, `heartbeat_rtt` y `agent_logs`
+El ingestor usa suscripciones y `insert_many`. El publisher mantiene CPU/RAM y añade selección de tags numéricas. `tags.address`, `heartbeat_rtt` y `agent_logs`
 se conservan pero no se exportan automáticamente. Las nuevas métricas OPC UA
 viajan en nodos `.batch`; usar los ejemplos de settings y layout de esta revisión
 si se actualiza el ingestor. No reemplazar la configuración viva sin adaptarla.
 La captura JSON se emite después del commit del lote en `Ingest.flush`.
 Los triggers de outbox se ejecutan AFTER INSERT y las muestras nuevas tienen
 índices únicos `(timestamp,sample_id)` para no duplicar outbox en conflictos.
+
+## Selector CSV de tags numéricos (0.2.0, pendiente de validar en DEV)
+
+El archivo usa las columnas `address,tag,metric_name,unit`. Ejemplo ilustrativo
+(no asumir que esta dirección existe en Balcones):
+
+```csv
+address,tag,metric_name,unit
+ns=2;s=MiCanal.MisTags.Heartbeat,Heartbeat,otlogger.tags.heartbeat,1
+```
+
+La pareja address/tag debe coincidir exactamente con `public.tags`. Cada fila
+seleccionada tiene un nombre de métrica único y se exporta como gauge double.
+Unit es la unidad real de la señal, o `1` para un contador adimensional.
+CPU/RAM siguen habilitadas independientemente de este archivo.
+
+Aplicar la migración 003 después de la 001/002 ya instalada. No reaplicar 001.
+003 crea el selector vacío: no publica automáticamente todos los tags ni copia
+histórico. Requiere `tags.address` del main reciente. Trigger y UUID mantienen
+identidad; el ingestor actualizado conserva UUID durante reintentos de escritura.
+La imagen nueva del publisher requiere ConfigMap `otlogger-publisher-tags`, con
+clave `tags-export.csv`. El ejemplo incluido tiene solo encabezado (sin tags).
+
+Actualizar esa ConfigMap con el CSV reemplazado. El volumen se monta como
+directorio, sin subPath; Kubernetes puede tardar en propagar el archivo.
+El publisher valida y sincroniza el selector en una transacción al detectar
+un cambio. Un archivo inválido conserva la selección anterior y emite error.
+Tras reiniciar o reconectar a DB vuelve a sincronizar la selección. Solo una
+réplica debe administrar ese selector por base.
+
+Agregar una fila selecciona nuevas lecturas desde que se sincroniza. Quitarla
+solo detiene nuevas entradas: los pendientes existentes conservan el mapeo
+original y se siguen enviando. Para detener también pendientes hace falta una
+operación explícita, no borrar datos silenciosamente. El timestamp exportado
+para tags es logger_timestamp. No se exportan UUID como etiquetas.
+
+Se validaron parseo CSV, duplicados, conversión de float y rechazo de NaN/Inf.
+En Balcones se aplicó 003 sobre TimescaleDB y se confirmó continuidad de
+ingesta con UUID y selector vacío. Pendiente: captura de tags seleccionadas,
+recarga por ConfigMap y envío end-to-end de un tag real. La nueva migración puede afectar la escritura si
+falla el trigger: validar primero en DEV y verificar timestamps del ingestor.

@@ -19,17 +19,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker build --platform linux/amd64 -f publisher/Dockerfile -t otlogger-publisher:0.1.0 .
+          docker build --platform linux/amd64 -f publisher/Dockerfile -t otlogger-publisher:0.2.0 .
           mkdir -p bundle
-          docker save otlogger-publisher:0.1.0 | gzip > bundle/otlogger-publisher-0.1.0.tar.gz
-          cp publisher/migrations/001_cpu_ram_outbox.sql bundle/
+          docker save otlogger-publisher:0.2.0 | gzip > bundle/otlogger-publisher-0.2.0.tar.gz
+          cp publisher/migrations/*.sql bundle/
+          cp publisher/tags-export.example.csv bundle/tags-export.csv
           cp publisher/k3s/deployment.yaml bundle/publisher-deployment.yaml
-          cp publisher/INSTALACION-OFFLINE.md bundle/
-          sha256sum bundle/otlogger-publisher-0.1.0.tar.gz bundle/001_cpu_ram_outbox.sql bundle/publisher-deployment.yaml > bundle/SHA256SUMS
+          sha256sum bundle/* > bundle/SHA256SUMS
           sed -i 's@bundle/@@g' bundle/SHA256SUMS
-          tar -czf OTLogger-Publisher-0.1.0-offline.tar.gz -C bundle .
+          tar -czf OTLogger-Publisher-0.2.0-offline.tar.gz -C bundle .
       - uses: actions/upload-artifact@v4
         with:
-          name: OTLogger-Publisher-0.1.0-offline
-          path: OTLogger-Publisher-0.1.0-offline.tar.gz
+          name: OTLogger-Publisher-0.2.0-offline
+          path: OTLogger-Publisher-0.2.0-offline.tar.gz
           compression-level: 0

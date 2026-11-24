@@ -152,7 +152,7 @@ class IngestorDatabase(ProjectDatabase):
         with self.transaction():
             with self.connection.cursor() as cur:
                 cur.execute("""SELECT table_name FROM information_schema.columns
-                    WHERE table_schema='public' AND table_name IN ('cpu_usage','ram_usage')
+                    WHERE table_schema='public' AND table_name IN ('cpu_usage','ram_usage','tags')
                     AND column_name='sample_id'""")
                 self._sample_id_tables = {row[0] for row in cur.fetchall()}
         logger.info(

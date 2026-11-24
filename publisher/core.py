@@ -1,4 +1,5 @@
 """Pure OTLP conversion. Sample IDs deliberately stay out of metric dimensions."""
+import math
 from datetime import datetime, timezone
 
 
@@ -22,8 +23,12 @@ def request_body(rows, service, source, pod_uid=None):
         if row['payload']['schema_version'] != 1:
             raise ValueError('Unsupported payload schema')
         data = row['payload']['data']
-        for column, name, unit, field in definitions[row['source_table']]:
+        fields = definitions[row['source_table']] if row['source_table'] != 'tags' else [
+            ('value', row['payload']['metric_name'], row['payload']['unit'], 'asDouble')]
+        for column, name, unit, field in fields:
             value = float(data[column]) if field == 'asDouble' else str(int(data[column]))
+            if field == 'asDouble' and not math.isfinite(value):
+                raise ValueError('Nonfinite numeric sample')
             point = {'timeUnixNano': nano(row['sample_timestamp']), field: value}
             metrics.setdefault(name, {'name': name, 'unit': unit, 'gauge': {'dataPoints': []}})['gauge']['dataPoints'].append(point)
     attrs = [('service.name', service), ('otlogger.source', source)]
@@ -31,7 +36,7 @@ def request_body(rows, service, source, pod_uid=None):
         attrs.append(('k8s.pod.uid', pod_uid))
     return {'resourceMetrics': [{'resource': {'attributes': [
         {'key': k, 'value': {'stringValue': v}} for k, v in attrs]},
-        'scopeMetrics': [{'scope': {'name': 'otlogger.publisher', 'version': '0.1.0'},
+        'scopeMetrics': [{'scope': {'name': 'otlogger.publisher', 'version': '0.2.0'},
                           'metrics': list(metrics.values())}]}]}
 
 

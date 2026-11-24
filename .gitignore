@@ -126,3 +126,5 @@ logs/
 Extractor.zip
 
 NOTES-azure-remote.md
+
+!publisher/tags-export.example.csv

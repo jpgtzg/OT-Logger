@@ -20,7 +20,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: publisher
-          image: otlogger-publisher:0.2.0
+          image: otlogger-publisher:0.3.0
           imagePullPolicy: Never
           envFrom:
             - secretRef:
@@ -34,6 +34,8 @@ spec:
               value: /config/tags-export.csv
             - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
               value: http://otel-collector.observability.svc.cluster.local:4318/v1/metrics
+            - name: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
+              value: http://otel-collector.observability.svc.cluster.local:4318/v1/logs
             - name: OTEL_SERVICE_NAME
               value: otlogger-publisher
             - name: OTLOGGER_SOURCE

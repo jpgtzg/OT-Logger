@@ -1,4 +1,4 @@
-# OTLogger Publisher 0.2.0
+# OTLogger Publisher 0.3.0
 
 Proceso independiente que publica CPU y RAM desde una outbox PostgreSQL hacia
 el Collector compartido. También publica tags numéricas seleccionadas mediante
@@ -32,7 +32,7 @@ flowchart LR
    PGUSER, PGPASSWORD. Usar el Service TimescaleDB real. No guardar secretos
    en Git ni copiar las credenciales del administrador.
 5. Construir desde la raíz: `docker build -f publisher/Dockerfile -t
-   otlogger-publisher:0.2.0 .` y cargar la imagen según el procedimiento edge.
+   otlogger-publisher:0.3.0 .` y cargar la imagen según el procedimiento edge.
 6. Ajustar `k3s/deployment.yaml`: imagen, nodo si solo uno tiene la imagen
    importada, Service DB, endpoint e identidad del servidor medido. Aplicar
    únicamente ese manifiesto, sin desplegar otra TimescaleDB.
@@ -87,7 +87,7 @@ La captura JSON se emite después del commit del lote en `Ingest.flush`.
 Los triggers de outbox se ejecutan AFTER INSERT y las muestras nuevas tienen
 índices únicos `(timestamp,sample_id)` para no duplicar outbox en conflictos.
 
-## Selector CSV de tags numéricos (0.2.0, pendiente de validar en DEV)
+## Selector CSV de tags numéricos (0.3.0, pendiente de validar en DEV)
 
 El archivo usa las columnas `address,tag,metric_name,unit`. Ejemplo ilustrativo
 (no asumir que esta dirección existe en Balcones):
@@ -127,3 +127,41 @@ En Balcones se aplicó 003 sobre TimescaleDB y se confirmó continuidad de
 ingesta con UUID y selector vacío. Pendiente: captura de tags seleccionadas,
 recarga por ConfigMap y envío end-to-end de un tag real. La nueva migración puede afectar la escritura si
 falla el trigger: validar primero en DEV y verificar timestamps del ingestor.
+
+
+## Publicación selectiva de registros (0.3.0, pendiente de validar en DEV)
+
+El CSV admite `address,tag,metric_name,unit,publish_as`. La columna opcional
+`publish_as` acepta `metrics`, `logs` o `metrics|logs`; los CSV antiguos siguen
+publicando métricas. Ejemplo ilustrativo (sustituir dirección y tag reales):
+
+```csv
+address,tag,metric_name,unit,publish_as
+ns=2;s=Example,Heartbeat,otlogger.heartbeat.example,1,logs
+```
+
+Los registros usan `event.type=industrial.tag.sample`, `measurement.id` (UUID de
+la muestra), `tag.name`, `tag.value` numérico, dirección, nombre de origen y unidad.
+Conservan el timestamp de la muestra. CPU y RAM siguen siendo solo métricas.
+No se generan lecturas ni calidad artificiales. El CSV selecciona nuevas muestras;
+las entregas pendientes conservan su configuración original.
+
+Antes de actualizar: detener SOLO el Deployment del publisher, aplicar 003 si no
+existe y después 004 con `psql -v ON_ERROR_STOP=1`. No repetir migraciones ya
+aplicadas. 004 conserva los estados existentes como metrics y cambia la clave a
+(sample_id, signal). No ejecutar la imagen antigua contra el esquema nuevo:
+su lógica de confirmación no distingue las dos rutas. No hay backfill histórico.
+
+Configurar `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` con la URL completa `/v1/logs`;
+por defecto se deriva del endpoint de métricas. Cada ruta tiene lease, aceptación,
+reintentos, expiración y limpieza de aceptados independientes. Un rechazo parcial
+reintenta el lote de esa ruta y puede duplicar los registros ya aceptados;
+measurement.id permite reconciliarlos, no garantiza deduplicación en Dynatrace.
+
+La antigüedad máxima actual (3600 s) se aplica a ambas rutas. Debe confirmarse
+la ventana real de logs antes de prometer recuperación de cortes más largos.
+Aceptados se limpian después de 48 h. Pendientes pueden pasar a expired;
+expired/rejected se retienen para diagnóstico, sin límite de disco automático.
+Los cambios del CSV usan el ConfigMap montado como directorio y son recargados
+sin reinicio después de la propagación de Kubernetes. No existe ACK extremo a
+extremo: collector_accepted no acredita persistencia definitiva en Dynatrace.

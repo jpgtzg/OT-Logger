@@ -1,5 +1,6 @@
 """Pure OTLP conversion. Sample IDs deliberately stay out of metric dimensions."""
 import math
+import uuid
 from datetime import datetime, timezone
 
 
@@ -36,12 +37,44 @@ def request_body(rows, service, source, pod_uid=None):
         attrs.append(('k8s.pod.uid', pod_uid))
     return {'resourceMetrics': [{'resource': {'attributes': [
         {'key': k, 'value': {'stringValue': v}} for k, v in attrs]},
-        'scopeMetrics': [{'scope': {'name': 'otlogger.publisher', 'version': '0.2.0'},
+        'scopeMetrics': [{'scope': {'name': 'otlogger.publisher', 'version': '0.3.0'},
                           'metrics': list(metrics.values())}]}]}
 
 
-def full_ack(status, ack):
+def logs_body(rows, service, source, pod_uid=None):
+    records = []
+    for row in rows:
+        if row['source_table'] != 'tags' or row['payload']['schema_version'] != 1:
+            raise ValueError('Logs require a numeric tag sample')
+        data = row['payload']['data']
+        value = float(data['value'])
+        if not math.isfinite(value):
+            raise ValueError('Nonfinite numeric sample')
+        identity = str(uuid.UUID(str(row['sample_id'])))
+        attrs = {'event.type': 'industrial.tag.sample', 'measurement.id': identity,
+                 'tag.name': row['payload']['metric_name'], 'tag.address': data['address'],
+                 'tag.source_name': data['tag'], 'tag.unit': row['payload']['unit']}
+        records.append({'timeUnixNano': nano(row['sample_timestamp']),
+                        'severityText': 'INFO', 'severityNumber': 9,
+                        'body': {'stringValue': 'OTLogger numeric tag sample'},
+                        'attributes': [{'key': k, 'value': {'stringValue': v}} for k, v in attrs.items()] +
+                                      [{'key': 'tag.value', 'value': {'doubleValue': value}}]})
+    attrs = [('service.name', service), ('otlogger.source', source)]
+    if pod_uid:
+        attrs.append(('k8s.pod.uid', pod_uid))
+    return {'resourceLogs': [{'resource': {'attributes': [
+        {'key': k, 'value': {'stringValue': v}} for k, v in attrs]},
+        'scopeLogs': [{'scope': {'name': 'otlogger.publisher', 'version': '0.3.0'},
+                       'logRecords': records}]}]}
+
+
+def full_ack(status, ack, signal='metrics'):
     if status != 200 or not isinstance(ack, dict):
         return False
     partial = ack.get('partialSuccess', {})
-    return isinstance(partial, dict) and int(partial.get('rejectedDataPoints', 0)) == 0
+    if not isinstance(partial, dict):
+        return False
+    try:
+        return int(partial.get('rejectedLogRecords' if signal == 'logs' else 'rejectedDataPoints', 0)) == 0
+    except (ValueError, TypeError):
+        return False

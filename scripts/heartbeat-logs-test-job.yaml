@@ -1,0 +1,41 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: otlogger-heartbeat-logs-test
+  namespace: idl
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  template:
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: usprmsmovmp01
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: sender
+          image: docker.io/library/otlogger-publisher:0.1.0
+          imagePullPolicy: Never
+          command: ["python3", "-u", "/sample/send-heartbeat-logs-test.py"]
+          env:
+            - name: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
+              value: http://otel-collector.observability.svc.cluster.local:4318/v1/logs
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          volumeMounts:
+            - name: sample
+              mountPath: /sample
+              readOnly: true
+      volumes:
+        - name: sample
+          configMap:
+            name: otlogger-heartbeat-logs-test-input

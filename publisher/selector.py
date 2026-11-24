@@ -6,14 +6,19 @@ import re
 
 def parse_selector(text):
     reader = csv.DictReader(io.StringIO(text.lstrip('\ufeff')))
-    if reader.fieldnames != ['address', 'tag', 'metric_name', 'unit']:
-        raise ValueError('Expected CSV header: address,tag,metric_name,unit')
+    if reader.fieldnames not in (['address', 'tag', 'metric_name', 'unit'],
+                               ['address', 'tag', 'metric_name', 'unit', 'publish_as']):
+        raise ValueError('Expected CSV header: address,tag,metric_name,unit[,publish_as]')
     rows, identities, metrics = [], set(), set()
     reserved = {'otlogger.cpu.usage', 'otlogger.ram.total', 'otlogger.ram.free'}
     for row in reader:
         if None in row or any(v is None for v in row.values()):
             raise ValueError('Invalid CSV row')
         row = {k: v.strip() for k, v in row.items()}
+        signals = row.get('publish_as', 'metrics').split('|')
+        if not signals or len(set(signals)) != len(signals) or set(signals) - {'metrics', 'logs'}:
+            raise ValueError('publish_as must be metrics, logs or metrics|logs')
+        row['publish_as'] = signals
         identity = (row['address'], row['tag'])
         name = row['metric_name']
         if not all(identity) or not re.fullmatch(r'[a-zA-Z][a-zA-Z0-9_.]{0,199}', name):

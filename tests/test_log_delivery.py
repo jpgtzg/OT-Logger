@@ -42,6 +42,39 @@ class LogDeliveryTests(unittest.TestCase):
             bad = row(); bad['payload']['data']['value'] = value
             with self.assertRaises(ValueError): core.logs_body([bad], 'p', 'k')
 
+    def test_opc_timestamps_preserved_separately_on_retry(self):
+        sample = row()
+        data = sample['payload']['data']
+        data['source_timestamp'] = '2026-11-24T16:10:42.012345+00:00'
+        data['server_timestamp'] = '2026-11-24T10:10:42.987654-06:00'
+        bodies = [core.logs_body([sample], 'p', 'k') for _ in range(2)]
+        self.assertEqual(bodies[0], bodies[1])
+        record = bodies[0]['resourceLogs'][0]['scopeLogs'][0]['logRecords'][0]
+        attrs = {a['key']: a['value']['stringValue'] for a in record['attributes'] if 'stringValue' in a['value']}
+        self.assertEqual(attrs['source_timestamp'], data['source_timestamp'])
+        self.assertEqual(attrs['server_timestamp'], data['server_timestamp'])
+        self.assertEqual(attrs['logger_timestamp'], sample['sample_timestamp'])
+        self.assertEqual(record['timeUnixNano'], core.nano(sample['sample_timestamp']))
+        metric = json.dumps(core.request_body([sample], 'p', 'k'))
+        self.assertNotIn('source_timestamp', metric)
+        self.assertNotIn('server_timestamp', metric)
+
+    def test_missing_opc_times_not_fabricated(self):
+        sample = row()
+        sample['payload']['data']['source_timestamp'] = None
+        record = core.logs_body([sample], 'p', 'k')['resourceLogs'][0]['scopeLogs'][0]['logRecords'][0]
+        attrs = {a['key']: a['value'] for a in record['attributes']}
+        self.assertNotIn('source_timestamp', attrs)
+        self.assertNotIn('server_timestamp', attrs)
+        self.assertIn('logger_timestamp', attrs)
+
+    def test_opc_time_requires_explicit_timezone(self):
+        for invalid in ['2026-11-24T16:10:42', 'not-a-time']:
+            sample = row()
+            sample['payload']['data']['server_timestamp'] = invalid
+            with self.assertRaises(ValueError):
+                core.logs_body([sample], 'p', 'k')
+
     def test_partial_logs_ack(self):
         self.assertTrue(core.full_ack(200, {'partialSuccess': {}}, 'logs'))
         for value in ['2', 'invalid', None]:

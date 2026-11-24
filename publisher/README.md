@@ -1,4 +1,4 @@
-# OTLogger Publisher 0.3.0
+# OTLogger Publisher 0.3.1
 
 Proceso independiente que publica CPU y RAM desde una outbox PostgreSQL hacia
 el Collector compartido. También publica tags numéricas seleccionadas mediante
@@ -165,3 +165,26 @@ expired/rejected se retienen para diagnóstico, sin límite de disco automático
 Los cambios del CSV usan el ConfigMap montado como directorio y son recargados
 sin reinicio después de la propagación de Kubernetes. No existe ACK extremo a
 extremo: collector_accepted no acredita persistencia definitiva en Dynatrace.
+
+
+## Tiempos OPC para análisis de delay (0.3.1)
+
+Los logs incluyen `source_timestamp` y `server_timestamp` como atributos string
+ISO 8601 con zona horaria, exactamente como están en el payload de TimescaleDB.
+`logger_timestamp` expone el tiempo de captura; sigue siendo el `timeUnixNano`
+OTLP que Dynatrace presenta como `timestamp`. No se reemplaza ningún tiempo por
+el momento de publicación ni durante reintentos. Si un timestamp OPC es NULL o
+no existe en el payload, se omite: no se inventan valores de respaldo.
+
+El outbox ya incluye estas columnas en payload.data, por lo que no hace falta
+migración ni modificar ingestor/extractor. Solo las nuevas entregas o pendientes
+procesadas con 0.3.1 incluyen los atributos; los logs aceptados antes no se reenvían.
+La precisión preservada es la almacenada en PostgreSQL (microsegundos), no una
+promesa de conservar los 100 ns originales de OPC UA. Los tres tiempos se
+convierten a timestamp en DQL para calcular server-source, logger-server y
+logger-source. Relojes desalineados pueden producir delays negativos; no truncarlos.
+No se añaden timestamps como dimensiones de métricas.
+
+Actualizar solo la imagen del Deployment existente a 0.3.1 después de importarla
+en containerd, conservando el ConfigMap con las 18 tags. No volver a ejecutar
+migraciones 001–004 ni reemplazar el CSV vivo por el ejemplo vacío del paquete.

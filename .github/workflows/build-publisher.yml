@@ -19,17 +19,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker build --platform linux/amd64 -f publisher/Dockerfile -t otlogger-publisher:0.3.0 .
+          docker build --platform linux/amd64 -f publisher/Dockerfile -t otlogger-publisher:0.3.1 .
           mkdir -p bundle
-          docker save otlogger-publisher:0.3.0 | gzip > bundle/otlogger-publisher-0.3.0.tar.gz
+          docker save otlogger-publisher:0.3.1 | gzip > bundle/otlogger-publisher-0.3.1.tar.gz
           cp publisher/migrations/*.sql bundle/
           cp publisher/tags-export.example.csv bundle/tags-export.csv
           cp publisher/k3s/deployment.yaml bundle/publisher-deployment.yaml
           sha256sum bundle/* > bundle/SHA256SUMS
           sed -i 's@bundle/@@g' bundle/SHA256SUMS
-          tar -czf OTLogger-Publisher-0.3.0-offline.tar.gz -C bundle .
+          tar -czf OTLogger-Publisher-0.3.1-offline.tar.gz -C bundle .
       - uses: actions/upload-artifact@v4
         with:
-          name: OTLogger-Publisher-0.3.0-offline
-          path: OTLogger-Publisher-0.3.0-offline.tar.gz
+          name: OTLogger-Publisher-0.3.1-offline
+          path: OTLogger-Publisher-0.3.1-offline.tar.gz
           compression-level: 0

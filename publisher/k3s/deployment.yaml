@@ -20,7 +20,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: publisher
-          image: otlogger-publisher:0.3.0
+          image: otlogger-publisher:0.3.1
           imagePullPolicy: Never
           envFrom:
             - secretRef:

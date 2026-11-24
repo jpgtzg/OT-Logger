@@ -37,7 +37,7 @@ def request_body(rows, service, source, pod_uid=None):
         attrs.append(('k8s.pod.uid', pod_uid))
     return {'resourceMetrics': [{'resource': {'attributes': [
         {'key': k, 'value': {'stringValue': v}} for k, v in attrs]},
-        'scopeMetrics': [{'scope': {'name': 'otlogger.publisher', 'version': '0.3.0'},
+        'scopeMetrics': [{'scope': {'name': 'otlogger.publisher', 'version': '0.3.1'},
                           'metrics': list(metrics.values())}]}]}
 
 
@@ -54,6 +54,13 @@ def logs_body(rows, service, source, pod_uid=None):
         attrs = {'event.type': 'industrial.tag.sample', 'measurement.id': identity,
                  'tag.name': row['payload']['metric_name'], 'tag.address': data['address'],
                  'tag.source_name': data['tag'], 'tag.unit': row['payload']['unit']}
+        # These are sample metadata, not metric dimensions. Missing OPC times
+        # remain absent: never replace them with capture or publication time.
+        for field in ('source_timestamp', 'server_timestamp', 'logger_timestamp'):
+            stamp = row['sample_timestamp'] if field == 'logger_timestamp' else data.get(field)
+            if stamp is not None:
+                nano(stamp)  # Validate timezone and representation before delivery.
+                attrs[field] = stamp if isinstance(stamp, str) else stamp.isoformat()
         records.append({'timeUnixNano': nano(row['sample_timestamp']),
                         'severityText': 'INFO', 'severityNumber': 9,
                         'body': {'stringValue': 'OTLogger numeric tag sample'},
@@ -64,7 +71,7 @@ def logs_body(rows, service, source, pod_uid=None):
         attrs.append(('k8s.pod.uid', pod_uid))
     return {'resourceLogs': [{'resource': {'attributes': [
         {'key': k, 'value': {'stringValue': v}} for k, v in attrs]},
-        'scopeLogs': [{'scope': {'name': 'otlogger.publisher', 'version': '0.3.0'},
+        'scopeLogs': [{'scope': {'name': 'otlogger.publisher', 'version': '0.3.1'},
                        'logRecords': records}]}]}
 
 

@@ -56,8 +56,8 @@ def main():
                                 with conn.transaction():
                                     conn.execute('DELETE FROM telemetry_export_tags')
                                     for item in selection:
-                                        conn.execute('INSERT INTO telemetry_export_tags (address,tag,metric_name,unit,publish_as) VALUES (%s,%s,%s,%s,%s)',
-                                            (item['address'],item['tag'],item['metric_name'],item['unit'],item['publish_as']))
+                                        conn.execute('INSERT INTO telemetry_export_tags (address,tag,metric_name,unit,publish_as,asset,node) VALUES (%s,%s,%s,%s,%s,%s,%s)',
+                                            (item['address'],item['tag'],item['metric_name'],item['unit'],item['publish_as'],item['asset'],item['node']))
                                 selector_content = content
                                 log.info('tag_selector_entries=%d', len(selection))
                         except (OSError, ValueError):

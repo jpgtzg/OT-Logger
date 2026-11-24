@@ -1,4 +1,4 @@
-# OTLogger Publisher 0.3.1
+# OTLogger Publisher 0.4.0
 
 Proceso independiente que publica CPU y RAM desde una outbox PostgreSQL hacia
 el Collector compartido. También publica tags numéricas seleccionadas mediante
@@ -188,3 +188,28 @@ No se añaden timestamps como dimensiones de métricas.
 Actualizar solo la imagen del Deployment existente a 0.3.1 después de importarla
 en containerd, conservando el ConfigMap con las 18 tags. No volver a ejecutar
 migraciones 001–004 ni reemplazar el CSV vivo por el ejemplo vacío del paquete.
+
+
+## Campos de dashboard (0.4.0)
+
+Actualizar desde 0.3.0 directamente a 0.4.0; no hace falta instalar 0.3.1.
+Detener solo publisher y aplicar únicamente 005 si 001–004 ya están instaladas.
+No arrancar 0.4.0 antes de aplicar 005. Conservar el ConfigMap vivo.
+
+CSV extendido: `address,tag,metric_name,unit,publish_as,asset,node`.
+Las columnas nuevas son opcionales para compatibilidad; si no están configuradas
+no se inventan dimensiones. Configurar asset y node con el propietario antes de
+validar el dashboard. No inferir que FLS equivale a TX. El publisher recarga CSV.
+005 guarda asset/node junto a la muestra en outbox; las pendientes previas no se
+reetiquetan con una configuración posterior.
+
+Atributos de log: `tag` = dirección OPC completa; `value` = double original;
+`source_timestamp` y `server_timestamp` = tiempos OPC presentes en payload;
+`logger_timestamp` = tiempo de captura (también timestamp del registro);
+`status_code` = calidad OPC de la muestra, nunca loglevel/status de Dynatrace;
+`asset` y `node` = valores explícitos del CSV. Se conservan los alias tag.name,
+tag.address, tag.source_name, tag.value y measurement.id.
+
+La clasificación propia usa `otlogger.event_type=industrial.tag.sample`, para
+no colisionar con event.type, que Dynatrace normaliza a LOG. Los timestamps
+faltantes se omiten; los registros históricos aceptados no se actualizan.

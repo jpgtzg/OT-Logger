@@ -75,6 +75,37 @@ class LogDeliveryTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 core.logs_body([sample], 'p', 'k')
 
+    def test_all_dashboard_fields_and_original_quality(self):
+        sample = row()
+        sample['payload'].update(asset='K1', node='RX')
+        sample['payload']['data'].update(
+            source_timestamp='2026-11-24T16:10:41.123456Z',
+            server_timestamp='2026-11-24T16:10:42.123456Z', status_code='BadNoCommunication')
+        body = core.logs_body([sample], 'p', 'k')
+        attrs = {a['key']: a['value'] for a in body['resourceLogs'][0]['scopeLogs'][0]['logRecords'][0]['attributes']}
+        for key in ['tag', 'value', 'source_timestamp', 'server_timestamp',
+                    'logger_timestamp', 'status_code', 'asset', 'node']:
+            self.assertIn(key, attrs)
+        self.assertEqual(attrs['tag']['stringValue'], sample['payload']['data']['address'])
+        self.assertEqual(attrs['value']['doubleValue'], 1.0)
+        self.assertEqual(attrs['status_code']['stringValue'], 'BadNoCommunication')
+        self.assertEqual(attrs['asset']['stringValue'], 'K1')
+        self.assertEqual(attrs['node']['stringValue'], 'RX')
+        self.assertNotIn('event.type', attrs)
+        self.assertIn('otlogger.event_type', attrs)
+        sample['payload'].pop('asset'); sample['payload'].pop('node')
+        sample['payload']['data']['status_code'] = None
+        record = core.logs_body([sample], 'p', 'k')['resourceLogs'][0]['scopeLogs'][0]['logRecords'][0]
+        keys = {a['key'] for a in record['attributes']}
+        self.assertTrue({'asset', 'node', 'status_code'}.isdisjoint(keys))
+
+    def test_csv_dimensions_remain_explicit(self):
+        text = 'address,tag,metric_name,unit,publish_as,asset,node\na,b,otlogger.h,1,metrics|logs,K1,RX\n'
+        item = selector.parse_selector(text)[0]
+        self.assertEqual((item['asset'], item['node']), ('K1', 'RX'))
+        old = selector.parse_selector('address,tag,metric_name,unit\na,b,otlogger.h,1')[0]
+        self.assertEqual((old['asset'], old['node']), ('', ''))
+
     def test_partial_logs_ack(self):
         self.assertTrue(core.full_ack(200, {'partialSuccess': {}}, 'logs'))
         for value in ['2', 'invalid', None]:

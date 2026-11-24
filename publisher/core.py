@@ -37,7 +37,7 @@ def request_body(rows, service, source, pod_uid=None):
         attrs.append(('k8s.pod.uid', pod_uid))
     return {'resourceMetrics': [{'resource': {'attributes': [
         {'key': k, 'value': {'stringValue': v}} for k, v in attrs]},
-        'scopeMetrics': [{'scope': {'name': 'otlogger.publisher', 'version': '0.3.1'},
+        'scopeMetrics': [{'scope': {'name': 'otlogger.publisher', 'version': '0.4.0'},
                           'metrics': list(metrics.values())}]}]}
 
 
@@ -51,9 +51,15 @@ def logs_body(rows, service, source, pod_uid=None):
         if not math.isfinite(value):
             raise ValueError('Nonfinite numeric sample')
         identity = str(uuid.UUID(str(row['sample_id'])))
-        attrs = {'event.type': 'industrial.tag.sample', 'measurement.id': identity,
+        attrs = {'otlogger.event_type': 'industrial.tag.sample', 'measurement.id': identity,
                  'tag.name': row['payload']['metric_name'], 'tag.address': data['address'],
-                 'tag.source_name': data['tag'], 'tag.unit': row['payload']['unit']}
+                 'tag.source_name': data['tag'], 'tag.unit': row['payload']['unit'],
+                 'tag': data['address']}
+        for field in ('asset', 'node'):
+            if row['payload'].get(field):
+                attrs[field] = row['payload'][field]
+        if data.get('status_code') is not None:
+            attrs['status_code'] = data['status_code']
         # These are sample metadata, not metric dimensions. Missing OPC times
         # remain absent: never replace them with capture or publication time.
         for field in ('source_timestamp', 'server_timestamp', 'logger_timestamp'):
@@ -65,13 +71,13 @@ def logs_body(rows, service, source, pod_uid=None):
                         'severityText': 'INFO', 'severityNumber': 9,
                         'body': {'stringValue': 'OTLogger numeric tag sample'},
                         'attributes': [{'key': k, 'value': {'stringValue': v}} for k, v in attrs.items()] +
-                                      [{'key': 'tag.value', 'value': {'doubleValue': value}}]})
+                                      [{'key': k, 'value': {'doubleValue': value}} for k in ('tag.value', 'value')]})
     attrs = [('service.name', service), ('otlogger.source', source)]
     if pod_uid:
         attrs.append(('k8s.pod.uid', pod_uid))
     return {'resourceLogs': [{'resource': {'attributes': [
         {'key': k, 'value': {'stringValue': v}} for k, v in attrs]},
-        'scopeLogs': [{'scope': {'name': 'otlogger.publisher', 'version': '0.3.1'},
+        'scopeLogs': [{'scope': {'name': 'otlogger.publisher', 'version': '0.4.0'},
                        'logRecords': records}]}]}
 
 
